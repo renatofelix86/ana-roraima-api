@@ -1,0 +1,59 @@
+# Sobreposição para a VPS: publica a API pelo Traefik, com HTTPS.
+#
+# Não é usada na máquina local (onde não há Traefik). Na VPS, ative pelo .env:
+#
+#     COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml
+#     API_DOMAIN=hidrologia.cbm.rr.gov.br
+#
+# Assim o comando continua sendo `docker compose up -d` nos dois ambientes.
+#
+# Ajustado ao Traefik v2.10 já instalado: entrypoints `web` (:80) e
+# `websecure` (:443), certresolver `myresolver` (ACME por desafio HTTP).
+#
+# O banco NÃO entra aqui: Traefik roteia HTTP, e Postgres não é HTTP. Ele
+# segue publicado apenas em 127.0.0.1:5433, alcançável por túnel SSH.
+
+services:
+  api:
+    networks:
+      # `default` precisa ser repetida: ao declarar `networks` num serviço, o
+      # Compose substitui a lista inteira, e sem ela a API perderia o acesso
+      # ao container `db`.
+      - default
+      - traefik
+    labels:
+      - "traefik.enable=true"
+
+      # Obrigatório aqui: o container fica em DUAS redes (a do projeto e a do
+      # Traefik) e o Traefik foi iniciado sem --providers.docker.network.
+      # Sem esta label ele pode escolher a rede errada e o roteamento falha
+      # de forma silenciosa.
+      - "traefik.docker.network=traefik_moodle-net"
+
+      # HTTPS
+      - "traefik.http.routers.hidrologia.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.hidrologia.entrypoints=websecure"
+      - "traefik.http.routers.hidrologia.tls.certresolver=myresolver"
+      - "traefik.http.services.hidrologia.loadbalancer.server.port=8000"
+
+      # HTTP apenas para redirecionar (o desafio ACME também usa a porta 80).
+      - "traefik.http.routers.hidrologia-http.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.hidrologia-http.entrypoints=web"
+      - "traefik.http.routers.hidrologia-http.middlewares=hidrologia-redirect"
+      - "traefik.http.middlewares.hidrologia-redirect.redirectscheme.scheme=https"
+
+  # O worker não expõe HTTP. O Traefik deste servidor roda com
+  # exposedbydefault ligado (o padrão), então marcamos explicitamente para ele
+  # não tentar criar rota para estes containers.
+  worker:
+    labels:
+      - "traefik.enable=false"
+
+  db:
+    labels:
+      - "traefik.enable=false"
+
+networks:
+  traefik:
+    external: true
+    name: traefik_moodle-net

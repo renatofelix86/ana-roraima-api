@@ -1,0 +1,44 @@
+# Sobreposição para expor o Postgres à internet com segurança.
+#
+# Ative no .env da VPS, junto com a do Traefik:
+#
+#     COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml:docker-compose.exposed.yml
+#     DB_BIND_IP=0.0.0.0
+#
+# Pré-requisitos, uma vez cada:
+#     ./scripts/setup-tls.sh                                  # gera o certificado
+#     docker compose run --rm api python -m app.harden_db     # tranca os papéis
+#
+# O que muda em relação ao padrão (banco só no loopback):
+#   1. TLS ligado -- sem ele a senha trafegaria em texto claro pela internet.
+#   2. pg_hba restrito: só `hidrologia` e `powerbi_ro`, e só sobre TLS.
+#      Nenhum superusuário é alcançável por rede.
+#   3. A porta passa a poder ser publicada em 0.0.0.0 via DB_BIND_IP.
+
+services:
+  db:
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/certs:/certs-src:ro
+
+    # O certificado é copiado para dentro do container e tem dono e permissão
+    # corrigidos antes de o Postgres subir. Ele recusa iniciar se a chave for
+    # legível por outros -- e um bind mount carrega as permissões do host, que
+    # variam entre Windows e Linux. Copiar resolve nos dois.
+    command:
+      - sh
+      - -ec
+      - |
+        mkdir -p /run/certs
+        cp /certs-src/server.crt /run/certs/server.crt
+        cp /certs-src/server.key /run/certs/server.key
+        chown postgres:postgres /run/certs/server.crt /run/certs/server.key
+        chmod 644 /run/certs/server.crt
+        chmod 600 /run/certs/server.key
+        exec docker-entrypoint.sh postgres \
+          -c ssl=on \
+          -c ssl_cert_file=/run/certs/server.crt \
+          -c ssl_key_file=/run/certs/server.key \
+          -c hba_file=/etc/postgresql/pg_hba.conf
+

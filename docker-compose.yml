@@ -1,0 +1,69 @@
+# Nome fixo do projeto: garante os mesmos nomes de container, rede e volume
+# independentemente do nome da pasta onde o repositório for clonado na VPS.
+# (é o mesmo valor que o Compose já deduzia aqui, então o volume atual é
+# reaproveitado — não recria banco vazio.)
+name: ana-roraima-api
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Interface e porta vêm do .env. Padrão 127.0.0.1:5433 -- loopback porque
+      # é o seguro, e 5433 porque a 5432 costuma estar ocupada pelo PostgreSQL
+      # nativo que acompanha o instalador do pgAdmin.
+      #
+      # DB_BIND_IP=0.0.0.0 expõe à internet e SÓ deve ser usado junto com
+      # docker-compose.exposed.yml, que liga o TLS e restringe os papéis.
+      #
+      # O mapeamento fica aqui, e não na sobreposição, de propósito: o Compose
+      # SOMA listas de `ports` entre arquivos em vez de substituir. Declarar de
+      # novo lá geraria 127.0.0.1:5433 e 0.0.0.0:5433 ao mesmo tempo, e o
+      # segundo falharia com "address already in use".
+      - "${DB_BIND_IP:-127.0.0.1}:${DB_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    ports:
+      # Configurável para não colidir com outras aplicações da VPS.
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    command: python -m app.worker
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

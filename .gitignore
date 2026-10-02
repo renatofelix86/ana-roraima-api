@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vscode/
+
+# backups locais do banco
+backups/
+
+# certificado TLS do Postgres (gerado por scripts/setup-tls.sh)
+postgres/certs/
